@@ -23,8 +23,15 @@ if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 if "summary_requested" not in st.session_state:
     st.session_state.summary_requested = False
+if "generated_code" not in st.session_state:
+    st.session_state.generated_code = ""
+if "current_language" not in st.session_state:
+    st.session_state.current_language = "Python"
+if "generated_problem" not in st.session_state:
+    st.session_state.generated_problem = ""
 
-# === 시스템 프롬프트 설정 ===
+# === 시스템 프롬프트 ===
+default_system_prompt = """
 default_system_prompt = """
 너는 이제부터 학생을 도와주는 **코드를 쉽게 분석해주는 튜터** 역할을 해.
 너의 목표는 학생이 코드의 작동 원리를 스스로 이해할 수 있도록 돕는 거야.
@@ -48,71 +55,28 @@ default_system_prompt = """
 "좋아요! 이제 이 코드를 네가 직접 설명할 수 있겠어요. 궁금한 게 더 있으면 언제든 물어봐!"
 """
 
-# === 초기 메시지 설정 ===
+# === 초기 메시지 ===
 if len(st.session_state.messages) == 0:
     st.session_state.messages.append({"role": "system", "content": default_system_prompt})
     st.session_state.messages.append({"role": "assistant", "content": "안녕하세요! 코딩 도우미 챗봇 **에듀봇**입니다.\n알고 싶은 코드가 있다면 편하게 물어보세요 😊"})
 
-# === 다크모드 CSS 적용 ===
+# === 다크모드 CSS ===
 def apply_theme():
     if st.session_state.dark_mode:
         st.markdown("""
         <style>
-            .stApp {
-                background-color: #121212;
-                color: #e0e0e0;
-            }
-            .stTextInput>div>input, .stTextArea>div>textarea {
-                background-color: #222222;
-                color: #e0e0e0;
-            }
-            pre, code {
-                background-color: #222222 !important;
-                color: #e0e0e0 !important;
-                padding: 10px;
-                border-radius: 8px;
-                overflow-x: auto;
-            }
-            .chat-user {
-                background-color: #333a4d;
-                border-radius: 10px;
-                padding: 10px;
-                margin-bottom: 10px;
-            }
-            .chat-assistant {
-                background-color: #003a6c;
-                border-radius: 10px;
-                padding: 10px;
-                margin-bottom: 10px;
-            }
+        .stApp { background-color: #121212; color: #e0e0e0; }
+        pre, code { background-color: #222 !important; color: #eee !important; padding: 10px; border-radius: 8px; }
         </style>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <style>
-            pre, code {
-                background-color: #f5f5f5;
-                color: #333333;
-                padding: 10px;
-                border-radius: 8px;
-                overflow-x: auto;
-            }
-            .chat-user {
-                background-color: #f0f0f5;
-                border-radius: 10px;
-                padding: 10px;
-                margin-bottom: 10px;
-            }
-            .chat-assistant {
-                background-color: #e8f6ff;
-                border-radius: 10px;
-                padding: 10px;
-                margin-bottom: 10px;
-            }
+        pre, code { background-color: #f5f5f5; color: #333; padding: 10px; border-radius: 8px; }
         </style>
         """, unsafe_allow_html=True)
 
-# === 사이드바 설정 ===
+# === 사이드바 ===
 st.sidebar.title("🔧 설정")
 st.session_state.api_key = st.sidebar.text_input("🔐 OpenAI API Key", type="password", value=st.session_state.api_key)
 model = st.sidebar.selectbox("💬 모델 선택", ["gpt-3.5-turbo", "gpt-4.1-mini"], index=1)
@@ -120,34 +84,6 @@ dark_mode_toggle = st.sidebar.checkbox("🌙 다크모드", value=st.session_sta
 if dark_mode_toggle != st.session_state.dark_mode:
     st.session_state.dark_mode = dark_mode_toggle
     st.rerun()
-
-if st.sidebar.button("📌 대화 요약하기"):
-    st.session_state.summary_requested = True
-    st.session_state.is_thinking = True
-    st.rerun()
-
-if st.sidebar.button("🧹 대화 초기화"):
-    st.session_state.messages = [{"role": "system", "content": default_system_prompt}]
-    st.session_state.messages.append({"role": "assistant", "content": "안녕하세요! 코딩 도우미 챗봇 **에듀봇**입니다.\n알고 싶은 코드가 있다면 편하게 물어보세요 😊"})
-    st.session_state.chat_input = ""
-    st.session_state.is_thinking = False
-    st.session_state.clear_input = False
-    st.rerun()
-
-def get_chat_log_text():
-    chat_log = ""
-    for msg in st.session_state.messages[1:]:
-        role = "사용자" if msg["role"] == "user" else "GPT"
-        chat_log += f"{role}: {msg['content']}\n\n"
-    return chat_log
-
-chat_log_text = get_chat_log_text()
-st.sidebar.download_button(
-    label="💾 대화 저장",
-    data=chat_log_text,
-    file_name=f"chat_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-    mime="text/plain",
-)
 
 if not st.session_state.api_key:
     st.warning("⚠️ OpenAI API 키가 필요합니다. 사이드바에서 입력해 주세요.")
@@ -157,72 +93,81 @@ if st.session_state.client is None:
     st.session_state.client = OpenAI(api_key=st.session_state.api_key)
 
 apply_theme()
-
 st.title("🤖 GPT-4.1 Mini 코딩봇")
 
+# === 대화 표시 ===
 with st.container():
-    messages_html = ""
     for msg in st.session_state.messages[1:]:
         if msg["role"] == "user":
-            messages_html += f"<div class='chat-user'>🧑‍💻 {msg['content']}</div>"
-        elif msg["role"] == "assistant":
-            messages_html += f"<div class='chat-assistant'>🤖 {msg['content']}</div>"
-    st.markdown(messages_html, unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#eee;border-radius:8px;padding:8px'>🧑‍💻 {msg['content']}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div style='background:#cce6ff;border-radius:8px;padding:8px'>🤖 {msg['content']}</div>", unsafe_allow_html=True)
 
-    html("""
-        <div id="scroll-anchor"></div>
-        <script>
-            const anchor = document.getElementById("scroll-anchor");
-            if (anchor) {
-                anchor.scrollIntoView({ behavior: "smooth", block: "end" });
-            }
-        </script>
-    """, height=0)
-
-if st.session_state.is_thinking:
-    st.info("🤖 GPT가 응답 중입니다... 잠시만 기다려주세요.")
-else:
-    if st.session_state.clear_input:
-        st.session_state.chat_input = ""
-        st.session_state.clear_input = False
-
-    user_input = st.text_area(
-        "메시지를 입력하세요:",
-        key="chat_input",
-        height=150,
-        placeholder="코드나 질문을 입력하세요. Shift+Enter로 줄바꿈 할 수 있어요.",
-    )
-
-if st.button("💬 물어보기", disabled=st.session_state.is_thinking) and st.session_state.chat_input.strip():
+# === 입력 ===
+user_input = st.text_area("메시지를 입력하세요:", value=st.session_state.chat_input, height=150, placeholder="코드나 질문을 입력하세요.")
+if st.button("💬 물어보기", disabled=st.session_state.is_thinking) and user_input.strip():
     st.session_state.is_thinking = True
-    st.session_state.messages.append({"role": "user", "content": st.session_state.chat_input})
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.generated_code = user_input
+    st.session_state.chat_input = ""
     st.rerun()
 
-if st.session_state.is_thinking:
-    with st.spinner("GPT가 생각 중입니다..."):
-        try:
-            if st.session_state.summary_requested:
-                st.session_state.messages.append({
-                    "role": "user",
-                    "content": "지금까지의 대화를 학생이 복습할 수 있도록 간단하고 쉽게 요약해줘."
-                })
+# === GPT 요청 함수 ===
+def ask_gpt(messages):
+    try:
+        response = st.session_state.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"GPT 요청 실패: {e}")
+        return ""
 
-            response = st.session_state.client.chat.completions.create(
-                model=model,
-                messages=st.session_state.messages,
-                temperature=0.7,
-                max_tokens=500,
-            )
-            reply = response.choices[0].message.content
+# === 코드 변환 + 문제 생성 버튼 ===
+col_py, col_c, col_java, col_prob = st.columns(4)
 
-            if st.session_state.summary_requested:
-                reply = f"📌 요약 결과:\n\n{reply}"
-                st.session_state.summary_requested = False
+with col_py:
+    if st.button("🐍 Python 코드"):
+        if st.session_state.generated_code.strip() and st.session_state.current_language != "Python":
+            with st.spinner("Python 코드로 변환 중..."):
+                result = ask_gpt([{"role": "user", "content": f"다음 코드를 Python으로 변환해줘:\n{st.session_state.generated_code}"}])
+                st.session_state.current_language = "Python"
+                st.session_state.generated_code = result
+                st.code(result, language="python")
 
-            st.session_state.messages.append({"role": "assistant", "content": reply})
-        except Exception as e:
-            st.error(f"오류 발생: {e}")
-        finally:
-            st.session_state.is_thinking = False
-            st.session_state.clear_input = True
-            st.rerun()
+with col_c:
+    if st.button("💻 C 코드"):
+        if st.session_state.generated_code.strip() and st.session_state.current_language != "C":
+            with st.spinner("C 코드로 변환 중..."):
+                result = ask_gpt([{"role": "user", "content": f"다음 코드를 C언어로 변환해줘:\n{st.session_state.generated_code}"}])
+                st.session_state.current_language = "C"
+                st.session_state.generated_code = result
+                st.code(result, language="c")
+
+with col_java:
+    if st.button("☕ Java 코드"):
+        if st.session_state.generated_code.strip() and st.session_state.current_language != "Java":
+            with st.spinner("Java 코드로 변환 중..."):
+                result = ask_gpt([{"role": "user", "content": f"다음 코드를 Java로 변환해줘:\n{st.session_state.generated_code}"}])
+                st.session_state.current_language = "Java"
+                st.session_state.generated_code = result
+                st.code(result, language="java")
+
+with col_prob:
+    if st.button("📌 문제 생성"):
+        if st.session_state.generated_code.strip():
+            with st.spinner("문제 + 코드 생성 중..."):
+                prompt = (
+                    f"다음 주제를 기반으로 간단한 코딩 문제를 하나 내주고, "
+                    f"{st.session_state.current_language}로 풀이 코드를 작성해줘.\n\n"
+                    f"주제: {st.session_state.generated_code}"
+                )
+                result = ask_gpt([{"role": "user", "content": prompt}])
+                st.session_state.generated_problem = result
+                st.markdown("**📌 생성된 문제 + 코드:**")
+                st.code(result, language=st.session_state.current_language.lower())
+        else:
+            st.warning("먼저 코드나 주제를 입력해 주세요!")
